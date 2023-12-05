@@ -39,16 +39,22 @@ object Tags {
   object http {
     private val prefix = "http"
 
+    val methodKey = s"$prefix.method"
+
     /** HTTP method of the request for the associated Span. E.g., "GET", "POST" */
-    def method(m: String): (String, TraceValue) = (s"$prefix.method", m)
+    def method(m: String): (String, TraceValue) = (methodKey, m)
+
+    val statusCodeKey = s"$prefix.status_code"
 
     /** HTTP response status code for the associated Span. E.g., 200, 503, 404 */
-    def status_code(s: String): (String, TraceValue) = (s"$prefix.status_code", s)
+    def status_code(s: String): (String, TraceValue) = (statusCodeKey, s)
+
+    val urlKey = s"$prefix.url"
 
     /** URL of the request being handled in this segment of the trace, in standard URI format.
       * E.g., "https://domain.net/path/to?resource=here"
       */
-    def url(u: String): (String, TraceValue) = (s"$prefix.url", u)
+    def url(u: String): (String, TraceValue) = (urlKey, u)
   }
 
   object message_bus {

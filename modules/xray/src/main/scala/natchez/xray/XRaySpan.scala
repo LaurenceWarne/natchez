@@ -103,16 +103,38 @@ private[xray] final case class XRaySpan[F[_]: Concurrent: Clock: Random](
 
   def serialize(end: FiniteDuration, exitCase: ExitCase): F[JsonObject] =
     (fields.get, children.get, XRaySpan.segmentId[F]).mapN { (fs, cs, id) =>
-      val (badKeys: Map[String, Json], goodKeys: Map[String, Json]) =
+      val (invalidKeys: Map[String, Json], validKeys: Map[String, Json]) =
         fs.partition { case (k, _) =>
           keyRegex.findFirstMatchIn(k).isDefined
         }
 
+      // In X-Ray http fields like method and url are nested in a top-level "http" field which is further
+      // split into "request" and "response".  By default span fields are collected into "annotations",
+      // but for convenience we lift the "http" fields.
+      val httpRequestKeyMappings = Map(Tags.http.methodKey -> "method", Tags.http.urlKey -> "url")
+      val httpResponseKeyMappings = Map(Tags.http.statusCodeKey -> "status")
+
+      // X-Ray only accepts numeric values for status code
+      val mappedInvalidKeys = invalidKeys.toList.mapFilter {
+        case (k, v) if k === Tags.http.statusCodeKey => v.asNumber.map(_.asJson).tupleLeft(k)
+        case (k, v)                                  => Some((k, v))
+      }.toMap
+
+      val httpRequestData = httpRequestKeyMappings.flatMap { case (key, xrayKey) =>
+        mappedInvalidKeys.get(key).tupleLeft(xrayKey)
+      }
+      val httpResponseData = httpResponseKeyMappings.flatMap { case (key, xrayKey) =>
+        mappedInvalidKeys.get(key).tupleLeft(xrayKey)
+      }
+
+      val badKeys = invalidKeys.filterNot { case (k, _) =>
+        httpRequestKeyMappings.contains(k) || httpResponseKeyMappings.contains(k)
+      }
       val fixedAnnotations = badKeys.map { case (k, v) =>
         keyRegex.replaceAllIn(k, "_") -> v
       }
       val allAnnotations: Map[String, Json] =
-        (goodKeys + ("malformed_keys" -> badKeys.keys
+        (validKeys + ("malformed_keys" -> badKeys.keys
           .mkString(",")
           .asJson)) ++ fixedAnnotations
 
@@ -127,6 +149,10 @@ private[xray] final case class XRaySpan[F[_]: Concurrent: Clock: Random](
         "metadata" -> JsonObject(
           "links" -> options.links.asJson,
           "span.kind" -> options.spanKind.asJson
+        ).asJson,
+        "http" -> JsonObject(
+          "request" -> httpRequestData.asJson,
+          "response" -> httpResponseData.asJson
         ).asJson
       ).deepMerge(exitCase match {
         case Canceled   => JsonObject.singleton("fault", true.asJson)
